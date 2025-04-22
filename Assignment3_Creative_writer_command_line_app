@@ -1,0 +1,59 @@
+import os
+import openai
+import argparse
+from dotenv import load_dotenv
+
+# Load API key from .env
+load_dotenv()
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+# Default LLM parameters
+MODEL_NAME = "gpt-4"  
+TEMPERATURE = 2.0
+TOP_P = 0.95
+PRESENCE_PENALTY = 1.0
+FREQUENCY_PENALTY = 0.7
+NUM_VARIATIONS = 3
+
+# System prompt to guide the model
+SYSTEM_PROMPT = (
+    "You are a highly creative and SEO-optimized content creator. "
+    "Generate engaging content (e.g., memes, marketing slogans, lyrics, poems, or blog posts) "
+    "that is rich in synonyms and keyword variations for maximum search engine optimization. "
+    "Be witty, expressive, and explore a wide lexical field."
+)
+
+def generate_variations(prompt, num_variations=NUM_VARIATIONS):
+    responses = []
+    for i in range(num_variations):
+        response = openai.ChatCompletion.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=TEMPERATURE,
+            top_p=TOP_P,
+            presence_penalty=PRESENCE_PENALTY,
+            frequency_penalty=FREQUENCY_PENALTY
+        )
+        content = response['choices'][0]['message']['content'].strip()
+        responses.append(content)
+    return responses
+
+def main():
+    parser = argparse.ArgumentParser(description="Creative Writer using OpenAI's LLM for SEO content")
+    parser.add_argument("prompt", type=str, help="Prompt for content creation")
+    args = parser.parse_args()
+
+    print("\nGenerating SEO-optimized creative content...\n")
+    results = generate_variations(args.prompt)
+
+    for idx, variation in enumerate(results, 1):
+        print(f"\n--- Variation {idx} ---\n{variation}\n")
+
+if __name__ == "__main__":
+    main()
+
+
+
