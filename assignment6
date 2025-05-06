@@ -1,0 +1,73 @@
+import argparse
+import os
+import requests
+from pathlib import Path
+from uuid import uuid4
+from openai import OpenAI
+
+# Initialize OpenAI client
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    raise EnvironmentError("OPENAI_API_KEY not found in environment variables.")
+client = OpenAI(api_key=api_key)
+
+ASPECT_RATIO_TO_SIZE = {
+    "1:1": "1024x1024",
+    "16:9": "1792x1024",
+    "4:3": "1408x1024",
+    "3:4": "1024x1408"
+}
+
+def generate_images(prompt, n, aspect_ratio, output_dir, verbose):
+    if aspect_ratio not in ASPECT_RATIO_TO_SIZE:
+        raise ValueError(f"Unsupported aspect ratio: {aspect_ratio}. Choose from {list(ASPECT_RATIO_TO_SIZE.keys())}")
+
+    size = ASPECT_RATIO_TO_SIZE[aspect_ratio]
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    saved_files = []
+
+    for i in range(n):
+        if verbose:
+            print(f"Generating image {i + 1}/{n} with size {size} for prompt: '{prompt}'")
+
+        response = client.images.generate(
+            model="dall-e-3",
+            prompt=prompt,
+            n=1,
+            size=size,
+            response_format="url"
+        )
+
+        image_url = response.data[0].url
+        img_data = requests.get(image_url).content
+        file_name = f"image_{str(uuid4())[:8]}.png"
+        file_path = os.path.join(output_dir, file_name)
+        with open(file_path, "wb") as f:
+            f.write(img_data)
+
+        print(f"[{i + 1}] Saved: {file_name}")
+        print(f"     URL: {image_url}")
+        saved_files.append(file_name)
+
+    return saved_files
+
+def main():
+    parser = argparse.ArgumentParser(description="Image generator using OpenAI's DALL·E 3 API")
+    parser.add_argument("--prompt", type=str, required=True, help="Image generation prompt")
+    parser.add_argument("--n", type=int, default=1, help="Number of images to generate (DALL·E 3 allows only 1 per request)")
+    parser.add_argument("--aspect_ratio", type=str, default="1:1", choices=ASPECT_RATIO_TO_SIZE.keys(), help="Aspect ratio of the image")
+    parser.add_argument("--output-dir", type=str, default=".", help="Directory to save generated images")
+    parser.add_argument("--negative_prompt", type=str, help="(Not supported by OpenAI, will be ignored)")
+    parser.add_argument("--seed", type=int, help="(Not supported by OpenAI, will be ignored)")
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose output")
+    args = parser.parse_args()
+
+    if args.negative_prompt:
+        print("Note: negative_prompt is not supported by OpenAI DALL·E 3 and will be ignored.")
+    if args.seed is not None:
+        print("Note: seed is not supported by OpenAI DALL·E 3 and will be ignored.")
+
+    generate_images(args.prompt, args.n, args.aspect_ratio, args.output_dir, args.verbose)
+
+if __name__ == "__main__":
+    main()
