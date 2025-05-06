@@ -1,0 +1,75 @@
+mport openai
+import base64
+import os
+import requests
+
+# === CONFIG ===
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+def encode_image_to_base64(image_path):
+    with open(image_path, "rb") as image_file:
+        return base64.b64encode(image_file.read()).decode('utf-8')
+
+def get_image_description(image_path):
+    base64_image = encode_image_to_base64(image_path)
+    response = openai.ChatCompletion.create(
+        model="gpt-4o",  # Updated to new vision-capable model
+
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image in vivid detail."},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                ]
+            }
+        ],
+        max_tokens=300
+    )
+    return response.choices[0].message["content"]
+
+def generate_image_from_description(description):
+    response = openai.Image.create(
+        model="dall-e-3",
+        prompt=description,
+        size="1024x1024",
+        n=1
+    )
+    return response["data"][0]["url"]
+
+def save_image_from_url(image_url, filename="final.png"):
+    response = requests.get(image_url)
+    if response.status_code == 200:
+        with open(filename, "wb") as f:
+            f.write(response.content)
+        print(f"\n✅ Image saved as {filename}")
+    else:
+        print(f"❌ Failed to download image: {response.status_code}")
+
+def save_description_to_file(description, filename="description.txt"):
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(description)
+    print(f"✅ Description saved as {filename}")
+
+def main():
+    image_path = input("Enter path to the input image: ").strip()
+
+    if not os.path.isfile(image_path):
+        print(f"Error: File not found at '{image_path}'")
+        return
+
+    print("\nDescribing image...")
+    description = get_image_description(image_path)
+    print("\n--- Image Description ---\n")
+    print(description)
+
+    save_description_to_file(description, "description.txt")
+
+    print("\nGenerating image from description...")
+    image_url = generate_image_from_description(description)
+
+    print("\nDownloading and saving generated image...")
+    save_image_from_url(image_url, "final.png")
+
+if __name__ == "__main__":
+    main()
