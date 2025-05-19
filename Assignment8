@@ -1,0 +1,157 @@
+import os
+import openai
+import requests
+import speech_recognition as sr
+from PIL import Image, ImageEnhance, ImageFilter
+from io import BytesIO
+from gtts import gTTS
+import pygame
+import time
+import uuid
+
+def speak(text):
+    filename = f"voice_{uuid.uuid4().hex}.mp3"
+    tts = gTTS(text=text, lang='fi')
+    tts.save(filename)
+
+    pygame.mixer.init()
+    pygame.mixer.music.load(filename)
+    pygame.mixer.music.play()
+
+    while pygame.mixer.music.get_busy():
+        time.sleep(0.2)
+
+    pygame.mixer.quit()
+
+    try:
+        os.remove(filename)
+    except Exception as e:
+        print(f"⚠️ Äänitiedostoa ei voitu poistaa: {e}")
+
+def show_supported_commands():
+    print("\n🛠 **Tuetut muokkauskomennot suomeksi:**")
+    print("- 'tee kirkkaammaksi', 'lisää valoa', 'valoisampi'")
+    print("- 'tee tummemmaksi', 'vähennä valoa', 'tummempi'")
+    print("- 'lisää kontrastia', 'kontrasti voimakkaammaksi'")
+    print("- 'vähennä kontrastia'")
+    print("- 'lisää terävyyttä', 'terävöitä'")
+    print("- 'vähennä terävyyttä'")
+    print("- 'lisää värejä', 'värikylläisempi', 'värikylläisyys'")
+    print("- 'sumenta', 'sumenna', 'blurraa'")
+    print("- 'peilaa', 'peilikuva'")
+    print("- 'käännä vasemmalle', 'pyöräytä vasemmalle'")
+    print("- 'käännä oikealle', 'pyöräytä oikealle'")
+    print("- 'lopeta', 'valmis'\n")
+
+def listen_command(prompt):
+    show_supported_commands()
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        print(prompt)
+        recognizer.adjust_for_ambient_noise(source, duration=1)
+        audio = recognizer.listen(source, phrase_time_limit=5)
+    try:
+        command = recognizer.recognize_google(audio, language='fi-FI')
+        print(f"🗣️ Ymmärretty komento: {command}")
+        speak(f"Ymmärsin: {command}")
+        return command.lower()
+    except sr.UnknownValueError:
+        print("❌ En ymmärtänyt komentoa.")
+        speak("En ymmärtänyt komentoa.")
+        return None
+
+def generate_image_with_openai(prompt):
+    openai.api_key = os.getenv("OPENAI_API_KEY")
+
+    print(f"📤 Lähetetään pyyntö OpenAI:lle aiheen: '{prompt}' perusteella...")
+    response = openai.Image.create(
+        model="dall-e-3",
+        prompt=prompt,
+        size="1024x1024",
+        n=1,
+        response_format="url"
+    )
+    image_url = response['data'][0]['url']
+    print(f"✅ Kuva generoitu. Ladataan osoitteesta: {image_url}")
+
+    img_data = requests.get(image_url).content
+    img = Image.open(BytesIO(img_data))
+    img.save("generated_image.png")
+    print("💾 Kuva tallennettu nimellä: generated_image.png")
+    return img
+
+def modify_image(img, command):
+    if any(word in command for word in ['kirkkaammaksi', 'valoa', 'valoisampi']):
+        enhancer = ImageEnhance.Brightness(img)
+        img = enhancer.enhance(1.5)
+        print("🌞 Kuvaa kirkastettu.")
+    elif any(word in command for word in ['tummemmaksi', 'vähemmän valoa', 'tummempi']):
+        enhancer = ImageEnhance.Brightness(img)
+        img = enhancer.enhance(0.7)
+        print("🌑 Kuvaa tummennettu.")
+    elif 'lisää kontrastia' in command or 'kontrasti voimakkaammaksi' in command:
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(1.5)
+        print("🌓 Kontrastia lisätty.")
+    elif 'vähennä kontrastia' in command:
+        enhancer = ImageEnhance.Contrast(img)
+        img = enhancer.enhance(0.7)
+        print("🌗 Kontrastia vähennetty.")
+    elif any(word in command for word in ['terävyyttä', 'terävöitä']):
+        enhancer = ImageEnhance.Sharpness(img)
+        img = enhancer.enhance(2.0)
+        print("🔍 Terävyyttä lisätty.")
+    elif 'vähennä terävyyttä' in command:
+        enhancer = ImageEnhance.Sharpness(img)
+        img = enhancer.enhance(0.7)
+        print("🟦 Terävyyttä vähennetty.")
+    elif any(word in command for word in ['värejä', 'värikylläisempi', 'värikylläisyys']):
+        enhancer = ImageEnhance.Color(img)
+        img = enhancer.enhance(1.5)
+        print("🎨 Värikylläisyyttä lisätty.")
+    elif any(word in command for word in ['sumenta', 'sumenna', 'blurraa']):
+        img = img.filter(ImageFilter.BLUR)
+        print("🌫️ Kuvaa sumentettu.")
+    elif any(word in command for word in ['peilaa', 'peilikuva']):
+        img = img.transpose(Image.FLIP_LEFT_RIGHT)
+        print("🪞 Kuva peilattu.")
+    elif any(word in command for word in ['käännä vasemmalle', 'pyöräytä vasemmalle']):
+        img = img.rotate(90, expand=True)
+        print("↩️ Kuva käännetty vasemmalle.")
+    elif any(word in command for word in ['käännä oikealle', 'pyöräytä oikealle']):
+        img = img.rotate(-90, expand=True)
+        print("↪️ Kuva käännetty oikealle.")
+    else:
+        print("⚠️ Ei tunnistettu muokkauskomentoa, kuvaa ei muutettu.")
+        speak("Komento ei ole tuttu.")
+        return img
+
+    return img
+
+def main():
+    if not os.getenv('OPENAI_API_KEY'):
+        print("❌ Virhe: OPENAI_API_KEY ei löydy ympäristömuuttujista.")
+        return
+
+    print("🧠 Aloitetaan tekoälypohjainen kuvageneraattori ja muokkain.")
+
+    description = listen_command("🎤 Kerro, millaisen kuvan haluat generoida.")
+    if description:
+        img = generate_image_with_openai(description)
+        img.show()
+
+        while True:
+            modify_cmd = listen_command("🎤 Miten haluat muokata kuvaa (tai sano 'lopeta' poistuaksesi)?")
+            if modify_cmd:
+                if 'lopeta' in modify_cmd or 'valmis' in modify_cmd:
+                    print("✅ Muokkaus lopetettu.")
+                    speak("Muokkaus lopetettu.")
+                    break
+                img = modify_image(img, modify_cmd)
+                img.show()
+
+        img.save("final_image.png")
+        print("💾 Lopullinen kuva tallennettu nimellä: final_image.png")
+
+if __name__ == "__main__":
+    main()
