@@ -1,0 +1,79 @@
+import os
+import openai
+from PIL import Image
+from typing import List
+
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+def load_images_from_folder(folder_path: str) -> List[str]:
+    supported_ext = (".jpg", ".jpeg", ".png", ".webp")
+    image_paths = [os.path.join(folder_path, f) for f in os.listdir(folder_path)
+                   if f.lower().endswith(supported_ext)]
+    return image_paths[:5]  # limit to 5 images
+
+def encode_image_to_base64(image_path):
+    import base64
+    with open(image_path, "rb") as img_file:
+        return base64.b64encode(img_file.read()).decode("utf-8")
+
+def generate_description(image_paths: List[str], user_prompt: str = ""):
+    outputs = []
+    for idx, path in enumerate(image_paths):
+        vision_inputs = [{
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{encode_image_to_base64(path)}"
+            }
+        }]
+        if user_prompt:
+            vision_inputs.append({"type": "text", "text": user_prompt})
+
+        response = openai.ChatCompletion.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a creative product marketing expert. "
+                        "Based on the given image, write THREE distinct versions of a product description, "
+                        "and THREE different catchy marketing slogans for each. "
+                        "Each version should have a unique tone, e.g., elegant, bold, humorous."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": vision_inputs
+                }
+            ],
+            max_tokens=1000
+        )
+
+        result = response["choices"][0]["message"]["content"]
+        outputs.append(f"🖼️ Image {idx + 1}:\n{result}\n")
+
+    return "\n".join(outputs)
+
+def main():
+    folder = input("📁 Enter folder path containing product images: ").strip()
+    if not os.path.isdir(folder):
+        print("❌ Error: Not a valid directory.")
+        return
+
+    prompt = input("📝 Optional: Enter extra product information or keywords (or leave blank): ").strip()
+
+    images = load_images_from_folder(folder)
+    if not images:
+        print("⚠️ No images found in the folder.")
+        return
+
+    output = generate_description(images, prompt)
+
+    print("\n🎯 Generated Marketing Content:\n")
+    print(output)
+
+    with open("product_descriptions.txt", "w", encoding="utf-8") as f:
+        f.write(output)
+    print("\n💾 Output saved to product_descriptions.txt")
+
+if __name__ == "__main__":
+    main()
