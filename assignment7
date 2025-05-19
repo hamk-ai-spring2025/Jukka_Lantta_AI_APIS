@@ -1,0 +1,160 @@
+import openai
+import sounddevice as sd
+import wavio
+import time
+import os
+from gtts import gTTS
+import pygame
+from datetime import datetime
+
+# Get OpenAI API key from environment variable
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+if not openai.api_key:
+    print("❌ ERROR: OPENAI_API_KEY environment variable not set.")
+    print("Set it using: set OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+    exit(1)
+
+# Language options (added English as option 10)
+LANGUAGE_OPTIONS = {
+    "1": {"name": "Finnish", "gtts_code": "fi"},
+    "2": {"name": "Spanish", "gtts_code": "es"},
+    "3": {"name": "French", "gtts_code": "fr"},
+    "4": {"name": "German", "gtts_code": "de"},
+    "5": {"name": "Italian", "gtts_code": "it"},
+    "6": {"name": "Japanese", "gtts_code": "ja"},
+    "7": {"name": "Chinese", "gtts_code": "zh-cn"},
+    "8": {"name": "Russian", "gtts_code": "ru"},
+    "9": {"name": "Swedish", "gtts_code": "sv"},
+    "10": {"name": "English", "gtts_code": "en"}
+}
+
+# Step 1: Record audio
+def record_audio(filename, duration=5, fs=44100):
+    print("\n🎤 Speak now and I will record...and translate. 5 secs.")
+    recording = sd.rec(int(duration * fs), samplerate=fs, channels=1)
+    sd.wait()
+    wavio.write(filename, recording, fs, sampwidth=2)
+    print("✅ Recording complete.")
+
+# Step 2: Transcribe audio to text using Whisper
+def transcribe_audio(filename):
+    print("📝 Transcribing...")
+    with open(filename, "rb") as audio_file:
+        transcript = openai.Audio.transcribe(
+            model="whisper-1",
+            file=audio_file,
+            response_format="json"
+        )
+    text = transcript.get("text", "").strip()
+
+    # Use GPT to detect language from the transcribed text
+    print("🔎 Detecting input language via GPT...")
+    lang_detected = detect_language_with_gpt(text)
+
+    print(f"🌍 Detected input language: {lang_detected}")
+    print(f"📜 Transcription: {text}")
+    return text, lang_detected
+
+# Step 2.5: Language detection with GPT
+def detect_language_with_gpt(text):
+    prompt = f"Detect the language of the following text. Respond with the language name only (e.g., 'Finnish', 'Spanish', 'English'): {text}"
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content.strip()
+
+# Step 3: Translate text using GPT
+def translate_text(text, target_language):
+    print(f"🌐 Translating to {target_language}...")
+    prompt = f"Translate this text to {target_language}: {text}"
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    translated = response.choices[0].message.content.strip()
+    print(f"🔄 Translation: {translated}")
+    return translated
+
+# Step 4: Convert text to speech, save and play it
+def speak_text(text, lang_code):
+    print("🔊 Converting text to speech...")
+
+    # Generate timestamped filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    audio_file = f"translated_{timestamp}.mp3"
+
+    # Save as MP3
+    tts = gTTS(text, lang=lang_code)
+    tts.save(audio_file)
+    print(f"💾 MP3 saved as: {audio_file}")
+
+    # Play the file
+    pygame.mixer.init()
+    pygame.mixer.music.load(audio_file)
+    pygame.mixer.music.play()
+    while pygame.mixer.music.get_busy():
+        continue
+    pygame.mixer.quit()
+
+# Show language options
+def select_language():
+    print("\n🌐 Select a target language and after I will record your voice and translate it.")
+    for key, value in LANGUAGE_OPTIONS.items():
+        print(f"{key}. {value['name']}")
+    choice = input("Enter the number of your choice: ").strip()
+    if choice in LANGUAGE_OPTIONS:
+        return LANGUAGE_OPTIONS[choice]
+    else:
+        print("⚠ Invalid choice. Defaulting to Finnish.")
+        return LANGUAGE_OPTIONS["1"]
+
+# Save to log file
+def save_to_log(original, translated, input_lang, target_lang):
+    with open("translation_log.txt", "a", encoding="utf-8") as log_file:
+        log_file.write(f"\n---\nInput language: {input_lang}\n")
+        log_file.write(f"Original: {original}\n")
+        log_file.write(f"Translated ({target_lang}): {translated}\n")
+
+# Main function
+def interpreter():
+    lang_choice = select_language()
+    target_language = lang_choice['name']
+    lang_code = lang_choice['gtts_code']
+
+    print("\n🚀 Starting continuous interpreter. Press Ctrl+C to stop.\n")
+
+    try:
+        while True:
+            start_time = time.time()
+
+            filename = "input.wav"
+            record_audio(filename)
+
+            transcript, input_lang = transcribe_audio(filename)
+
+            translated = translate_text(transcript, target_language)
+
+            save_to_log(transcript, translated, input_lang, target_language)
+
+            speak_text(translated, lang_code)
+
+            end_time = time.time()
+            delay = end_time - start_time
+            print(f"⏱ Total time for this round: {delay:.2f} seconds.\n")
+
+            user_input = input("Press Enter to continue, 'change' to switch language, or 'quit' to exit: ").strip().lower()
+            if user_input == "change":
+                lang_choice = select_language()
+                target_language = lang_choice['name']
+                lang_code = lang_choice['gtts_code']
+            elif user_input == "quit":
+                print("👋 Exiting interpreter.")
+                break
+
+    except KeyboardInterrupt:
+        print("\n👋 Interpreter stopped by user.")
+
+if __name__ == "__main__":
+    interpreter()
