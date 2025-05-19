@@ -1,0 +1,46 @@
+import random
+import json
+import openai
+import os
+
+# Load your OpenAI API key from environment variable
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+# List of rock/pop/movie culture words
+CULTURE_WORDS = [
+    "grunge", "blockbuster", "encore", "indie", "remake",
+    "headliner", "cameo", "binge", "remaster", "spin-off",
+    "bootleg", "iconic", "chart-topper", "riff", "cult-classic",
+    "autotune", "mashup", "reboot", "hook", "soundtrack"
+]
+
+def generate_random_words(n=5):
+    return random.sample(CULTURE_WORDS, n)
+
+def get_llm_definitions(words):
+    prompt = f"""Generate dictionary entries in JSON format for these cultural terms: {', '.join(words)}.
+Each entry must contain:
+- word
+- definitions (list of possible definitions)
+- synonyms (list)
+- antonyms (list)
+- usage_examples (list)
+
+Output must be valid JSON only. No comments or explanation."""
+   
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=1000
+    )
+    return response.choices[0].message.content.strip()
+
+def main():
+    words = generate_random_words()
+    json_output = get_llm_definitions(words)
+    print(json_output)
+
+if __name__ == "__main__":
+    main()
+
