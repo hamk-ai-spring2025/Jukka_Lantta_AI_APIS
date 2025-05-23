@@ -1,0 +1,128 @@
+import os
+import openai
+import requests
+import re
+import subprocess
+
+# OpenAI API-avain ympäristömuuttujasta
+openai.api_key = os.getenv("OPENAI_API_KEY")
+if not openai.api_key:
+    print("❌ ERROR: OPENAI_API_KEY environment variable is not set.")
+    exit(1)
+
+# Luo GPT-4:llä markdown-muotoinen tieteellinen artikkeli
+def generate_markdown_article(topic):
+    system_prompt = (
+        "You are a scientific writer. Write a full academic article using GitHub-flavored markdown (GFM). "
+        "Use markdown formatting including headers (#), subheaders (##, ###), bold (**text**), italic (*text*), "
+        "bullet lists (-), numbered lists (1.), and markdown tables if appropriate. "
+        "Use APA style in-text citations (Author, Year) and include a markdown-formatted reference list at the end."
+    )
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Write a full scientific article about: {topic}"}
+        ],
+        temperature=0.7,
+        max_tokens=3500
+    )
+    return response.choices[0].message.content
+
+# Etsi viitteet markdown-tekstistä
+def extract_references(md):
+    ref_section = re.search(r"(#+\s*References.*?)$", md, re.DOTALL | re.IGNORECASE)
+    if not ref_section:
+        return []
+    lines = ref_section.group(1).split("\n")[1:]
+    return [line.strip() for line in lines if line.strip()]
+
+# Tarkista ja korvaa hallucinoidut viitteet oikeilla CrossRefista
+def validate_and_correct_references(refs):
+    corrected, hallucinated = [], []
+    bib_replacements = {}
+    intext_replacements = {}
+
+    for ref in refs:
+        query = re.sub(r'\([^)]*\)', '', ref)
+        params = {'query': query, 'rows': 1}
+        try:
+            response = requests.get('https://api.crossref.org/works', params=params)
+            data = response.json()
+        except Exception as e:
+            print(f"❌ CrossRef API error: {e}")
+            hallucinated.append(ref)
+            continue
+
+        if 'message' in data and 'items' in data['message'] and data['message']['items']:
+            item = data['message']['items'][0]
+            title = item.get('title', [''])[0]
+            doi = item.get('DOI', '')
+            authors = item.get('author', [])
+            year = item.get('issued', {}).get('date-parts', [[None]])[0][0]
+            journal = item.get('container-title', [''])[0]
+            volume = item.get('volume', '')
+            page = item.get('page', '')
+
+            author_strs = []
+            for a in authors[:3]:
+                family = a.get('family') or a.get('name', 'Unknown')
+                given = a.get('given', '')
+                if given:
+                    author_strs.append(f"{family}, {given[0]}.")
+                else:
+                    author_strs.append(f"{family}")
+            author_str = ", ".join(author_strs)
+
+            first_author = authors[0] if authors else {}
+            family = first_author.get('family') or first_author.get('name', 'Unknown')
+            intext = f"({family}, {year})"
+
+            apa = f"- {author_str} ({year}). *{title}*. *{journal}*, {volume}, {page}. https://doi.org/{doi}"
+            bib_replacements[ref] = apa + "  *(corrected)*"
+            intext_replacements[intext] = f"[{intext}](https://doi.org/{doi})"
+            corrected.append(apa)
+        else:
+            hallucinated.append(ref)
+
+    return corrected, hallucinated, bib_replacements, intext_replacements
+
+# Korvaa tekstissä olevat viitteet ja sisäiset viittaukset
+def replace_all(md_text, bib_map, intext_map):
+    for old, new in bib_map.items():
+        md_text = md_text.replace(old, new)
+    for old, new in intext_map.items():
+        md_text = md_text.replace(old, new)
+    return md_text
+
+# Pääohjelma
+def main():
+    topic = input("Enter a scientific topic: ")
+    print("⏳ Generating article...")
+    md = generate_markdown_article(topic)
+
+    with open("generated_article_raw.md", "w", encoding="utf-8") as f:
+        f.write(md)
+
+    print("🔍 Validating references...")
+    refs = extract_references(md)
+    corrected, hallucinated, bib_map, intext_map = validate_and_correct_references(refs)
+
+    print(f"\n📚 Total references: {len(refs)}")
+    print(f"✔️ Corrected: {len(corrected)}")
+    print(f"❌ Hallucinated: {len(hallucinated)}")
+
+    new_md = replace_all(md, bib_map, intext_map)
+
+    # Tallenna lopullinen markdown
+    final_md = "generated_article_final.md"
+    with open(final_md, "w", encoding="utf-8") as f:
+        f.write(new_md)
+
+    print("✅ Markdown saved as:", final_md)
+
+    # 🔁 Pandoc-muunnokset
+    try:
+        subprocess.run(["pandoc", final_md, "-o", "generated_article.docx"], check=True)
+        print("📄 DOCX saved as: generated_article.docx")
+    except Exception as e:
