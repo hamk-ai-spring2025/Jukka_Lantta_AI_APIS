@@ -1,0 +1,127 @@
+from flask import Flask, request, jsonify, redirect, Response
+import os
+import json
+from playwright.sync_api import sync_playwright
+from openai import OpenAI
+
+app = Flask(__name__)
+# Enable pretty-printing of JSON responses (affects jsonify)
+app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
+
+# Initialize OpenAI client
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+@app.route('/', methods=['GET'])
+def index():
+    return '''
+      <h1>Product Scraper</h1>
+      <form action="/scrape" method="post">
+        <input name="url" placeholder="Product URL" size="60" required/>
+        <button type="submit">Scrape!</button>
+      </form>
+    '''
+
+# Helper: extract first text matching any selector
+
+def get_first_text(page, selectors):
+    for sel in selectors:
+        try:
+            el = page.query_selector(sel)
+            if el:
+                txt = el.text_content().strip()
+                if txt:
+                    return txt
+        except:
+            continue
+    return ''
+
+# Scrape product details
+def scrape_product(url):
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(url, wait_until="domcontentloaded")
+       
+        # Accept cookies if prompted
+        try:
+            page.click('input#sp-cc-accept', timeout=5000)
+        except:
+            pass
+
+        title = get_first_text(page, ['#productTitle', 'h1 span#title'])
+
+        price_selectors = [
+            '#priceblock_ourprice',
+            '#priceblock_dealprice',
+            '#priceblock_saleprice',
+            '#price',
+            '[data-asin-price]',
+            'span.a-price .a-offscreen'
+        ]
+        price = get_first_text(page, price_selectors)
+
+        bullets = page.query_selector_all('#feature-bullets ul li, #feature-bullets li')
+        if bullets:
+            description = ' '.join([b.text_content().strip() for b in bullets])
+        else:
+            description = get_first_text(page, ['#productDescription', '#bookDescription_feature_div'])
+
+        rating = get_first_text(page, ['#acrPopover', '.averageStarRating span', 'i.a-icon-star span'])
+
+        browser.close()
+    return {"title": title, "price": price, "description": description, "rating": rating}
+
+# Rewrite description with OpenAI
+
+def rewrite_description(product):
+    prompt = f"""You are a professional product copywriter. Given the following details:
+
+Product Name: {product['title']}
+Price: {product['price']}
+Rating: {product['rating']}
+Original Features: {product['description']}
+
+Rewrite and enhance the product description, making it more engaging and informative, taking into account the price point and customer rating."""
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "You write compelling ecommerce copy."},
+            {"role": "user", "content": prompt}
+        ],
+        max_tokens=300,
+        temperature=0.7
+    )
+    return response.choices[0].message.content.strip()
+
+@app.route('/scrape', methods=['GET', 'POST'])
+def handle_scrape():
+    # Redirect GET to home form
+    if request.method == 'GET':
+        return redirect('/')
+
+    # Determine URL from JSON or form
+    url = request.get_json().get('url') if request.is_json else request.form.get('url')
+    if not url:
+        return jsonify({'error': 'Missing product URL'}), 400
+
+    try:
+        product = scrape_product(url)
+        improved = rewrite_description(product)
+        result = {
+            'name': product['title'],
+            'price': product['price'],
+            'rating': product['rating'],
+            'originalDescription': product['description'],
+            'improvedDescription': improved
+        }
+        # Always return pretty JSON
+        return Response(
+            json.dumps(result, indent=2),
+            mimetype='application/json'
+        )
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+if __name__ == '__main__':
+    port = int(os.getenv('PORT', 3000))
+    app.run(host='0.0.0.0', port=port)
